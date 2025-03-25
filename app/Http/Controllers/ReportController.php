@@ -32,13 +32,13 @@ class ReportController extends Controller
                 'groupBy' => [
                     'nullable',
                     'array',
-                    function ($attribute, $value, $fail) use ($request) {
-                        if ($request->input('topN') !== null && empty($value)) {
-                            $fail('The groupBy field is required when topN is provided.');
-                        }
-                    },
+                    // function ($attribute, $value, $fail) use ($request) {
+                    //     if ($request->input('topN') !== null && empty($value)) {
+                    //         $fail('The groupBy field is required when topN is provided.');
+                    //     }
+                    // },
                 ],
-                'groupBy.*' => 'nullable|in:expenseTypeId,expenseCategoryId,mainLocationId,subLocationId,userId',
+                'groupBy.*' => 'nullable|in:expenseTypeId,expenseCategoryId,mainLocationId,subLocationId,userId,monthWise',
             ];
             $groupBySelectColumns = [
                 "expenseTypeId" => "expenseTypeName",
@@ -46,6 +46,7 @@ class ReportController extends Controller
                 "mainLocationId" => "mainLocationName",
                 "subLocationId" => "subLocationName",
                 "userId" => "expenseCategoryName",
+                "monthWise" => "YEAR(dateOfExpense) as txnYear, MONTH(dateOfExpense) as txnMonth",
             ];
             $errorMessage = [];
 
@@ -64,16 +65,23 @@ class ReportController extends Controller
             if (!empty($request->toDate)) {
                 $reportQuery->where("dateOfExpense", "<=", $request->toDate);
             }
+            $groupByColumns = [
+                "expenseTypeId" => "expenses.expenseTypeId",
+                "expenseCategoryId" => "expenses.expenseCategoryId",
+                "mainLocationId" => "expenses.mainLocationId",
+                "subLocationId" => "expenses.subLocationId",
+                "userId" => "expenses.userId",
+                "monthWise" => "YEAR(dateOfExpense), MONTH(dateOfExpense)",
+            ];
             if (!empty($request->topN)) {
-                $reportQuery->limit($request->topN)->orderBy(DB::raw("sum(amount)"), "desc")->groupByRaw(implode(",", $request->groupBy));
-            } else {
-                if (!empty($request->groupBy)) {
-                    $groupBy = $request->groupBy;
-                    foreach ($groupBy as &$item) {
-                        $item = "expenses.$item";
-                    }
-                    $reportQuery->orderBy(DB::raw("sum(amount)"), "desc")->groupByRaw(implode(",", $groupBy));
+                $reportQuery->limit($request->topN)->orderBy(DB::raw("amount"), "desc");
+            }
+            if (!empty($request->groupBy)) {
+                $groupBy = $request->groupBy;
+                foreach ($groupBy as &$item) {
+                    $item = $groupByColumns[$item];
                 }
+                $reportQuery->orderBy(DB::raw("sum(amount)"), "desc")->groupByRaw(implode(",", $groupBy));
             }
             if (!empty($request->expenseTypeId)) {
                 $reportQuery->whereIn("expenses.expenseTypeId", $request->expenseTypeId);
@@ -102,9 +110,10 @@ class ReportController extends Controller
                 $tempGroupBySelectColumnsRaw = [];
                 $tempGroupBySelectColumnsIdsRaw = [];
                 foreach ($request->groupBy as $item) {
-                    $tempGroupBySelectColumnsRaw[] = $groupBySelectColumns[$item];
+                    $tempGroupBySelectColumnsRaw[] = $item == "monthWise" ? "YEAR(dateOfExpense)  as txnYear, MONTH(dateOfExpense) as txnMonth" : $groupBySelectColumns[$item];
                     if (in_array($item, ['mainLocationId'])) {
                         $tempGroupBySelectColumnsIdsRaw[] = "expenses.$item";
+                    } else if (in_array($item, ['monthWise'])) {
                     } else {
                         $tempGroupBySelectColumnsIdsRaw[] = $item;
                     }
@@ -113,16 +122,13 @@ class ReportController extends Controller
                 $groupBySelectColumnsIdsRaw = implode(",", $tempGroupBySelectColumnsIdsRaw);
             }
 
-            if (!empty($request->topN)) {
-                $rawSelect = "sum(amount) as amount,$groupBySelectColumnsRaw,$groupBySelectColumnsIdsRaw";
+            
+            if (!empty($request->groupBy)) {
+                $rawSelect = $groupBySelectColumnsIdsRaw ? "sum(amount) as amount,$groupBySelectColumnsRaw,$groupBySelectColumnsIdsRaw" : "sum(amount) as amount,$groupBySelectColumnsRaw";
             } else {
-                if (!empty($request->groupBy)) {
-                    $rawSelect = "sum(amount) as amount,$groupBySelectColumnsRaw,$groupBySelectColumnsIdsRaw";
-                } else {
-                    $rawSelect = "expenses.id,transactionId,amount,dateOfExpense,title,expenseCategoryName,expenseTypeName,users.name as userName,mainLocationName,subLocationName";
-                    if (!empty($request->monthWise) && $request->montWise == "yes") {
-                        $rawSelect .= ",Month(dateOfExpense),Year(dateOfExpense)";
-                    }
+                $rawSelect = "expenses.id,transactionId,amount,dateOfExpense,title,expenseCategoryName,expenseTypeName,users.name as userName,mainLocationName,subLocationName";
+                if (!empty($request->monthWise) && $request->montWise == "yes") {
+                    $rawSelect .= ",Month(dateOfExpense),Year(dateOfExpense)";
                 }
             }
             $data = $reportQuery->selectRaw($rawSelect)->get();
@@ -144,6 +150,7 @@ class ReportController extends Controller
                     foreach ($request->groupBy as $item) {
                         if (in_array($item, ['mainLocationId'])) {
                             $tempCondition["expenses.$item"] = $groupRowItem[$item];
+                        } else if (in_array($item, ['monthWise'])) {
                         } else {
                             $tempCondition[$item] = $groupRowItem[$item];
 
@@ -151,6 +158,10 @@ class ReportController extends Controller
                     }
                     $subQuery = Expense::where($tempCondition);
 
+                    if (in_array("monthWise", $request->groupBy)) {
+                        $subQuery->whereRaw("Month(dateOfExpense)=" . $groupRowItem["txnMonth"]);
+                        $subQuery->whereRaw("Year(dateOfExpense)=" . $groupRowItem["txnYear"]);
+                    }
                     if (!empty($request->expenseTypeId)) {
                         $subQuery->whereIn("expenses.expenseTypeId", $request->expenseTypeId);
                     }
@@ -172,7 +183,7 @@ class ReportController extends Controller
                     if (!empty($request->toDate)) {
                         $subQuery->where("dateOfExpense", "<=", $request->toDate);
                     }
-                    $groupRowItem['subRecords'] = $subQuery->get();
+                    $groupRowItem['subRecords'] = $subQuery->selectRaw("*,Month(dateOfExpense) as txnMonth,Year(dateOfExpense) as txnYear")->get();
                     $groupRowItem['subRecordsCount'] = $subQuery->count();
                     $groupRowItem['percentage'] = $totalAmount ? number_format($groupRowItem['amount'] * 100 / $totalAmount, 2) : null;
                 }
