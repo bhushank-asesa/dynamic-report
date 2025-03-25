@@ -122,7 +122,7 @@ class ReportController extends Controller
                 $groupBySelectColumnsIdsRaw = implode(",", $tempGroupBySelectColumnsIdsRaw);
             }
 
-            
+
             if (!empty($request->groupBy)) {
                 $rawSelect = $groupBySelectColumnsIdsRaw ? "sum(amount) as amount,$groupBySelectColumnsRaw,$groupBySelectColumnsIdsRaw" : "sum(amount) as amount,$groupBySelectColumnsRaw";
             } else {
@@ -133,12 +133,13 @@ class ReportController extends Controller
             }
             $data = $reportQuery->selectRaw($rawSelect)->get();
 
-            $totalAmount = 0;
+            $conditionalTotalAmount = 0;
 
             if ($data->isEmpty()) {
                 throw new Exception("No Data found");
             }
-            $totalAmount = $data->reduce(function ($carry, $item) {
+            $totalAmount = Expense::where("status", "1")->sum("amount");
+            $conditionalTotalAmount = $data->reduce(function ($carry, $item) {
                 return $carry += $item->amount;
             }, 0);
             $rawQuery = $reportQuery->toRawSql();
@@ -185,11 +186,12 @@ class ReportController extends Controller
                     }
                     $groupRowItem['subRecords'] = $subQuery->selectRaw("*,Month(dateOfExpense) as txnMonth,Year(dateOfExpense) as txnYear")->get();
                     $groupRowItem['subRecordsCount'] = $subQuery->count();
+                    $groupRowItem['conditionalPercentage'] = $conditionalTotalAmount ? number_format($groupRowItem['amount'] * 100 / $conditionalTotalAmount, 2) : null;
                     $groupRowItem['percentage'] = $totalAmount ? number_format($groupRowItem['amount'] * 100 / $totalAmount, 2) : null;
                 }
             }
 
-            return response()->json(['status' => true, "message" => "Reports data found", "data" => $data, "count" => count($data), "rawQuery" => $rawQuery, "totalAmount" => $totalAmount]);
+            return response()->json(['status' => true, "message" => "Reports data found", "data" => $data, "count" => count($data), "rawQuery" => $rawQuery, "conditionalTotalAmount" => $conditionalTotalAmount, "totalAmount" => $totalAmount]);
         } catch (Exception $e) {
             info('error in ' . __METHOD__ . ' ' . $e->getMessage() . ' in file ' . $e->getFile() . ' at line no ' . $e->getLine());
             return response()->json(['status' => false, "message" => $e->getMessage()]);
