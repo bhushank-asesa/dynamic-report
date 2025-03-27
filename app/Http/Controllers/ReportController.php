@@ -33,15 +33,7 @@ class ReportController extends Controller
                 'sortAmount' => 'nullable|in:asc,desc',
                 'monthWise' => 'nullable|in:yes,no',
                 'subRecords' => 'nullable|in:yes,no',
-                'groupBy' => [
-                    'nullable',
-                    'array',
-                    // function ($attribute, $value, $fail) use ($request) {
-                    //     if ($request->input('topN') !== null && empty($value)) {
-                    //         $fail('The groupBy field is required when topN is provided.');
-                    //     }
-                    // },
-                ],
+                'groupBy' => ['nullable', 'array'],
                 'groupBy.*' => 'nullable|in:expenseTypeId,expenseCategoryId,mainLocationId,subLocationId,userId,monthWise',
             ];
             $groupBySelectColumns = [
@@ -128,7 +120,7 @@ class ReportController extends Controller
             if (!empty($request->groupBy)) {
                 $rawSelect = $groupBySelectColumnsIdsRaw ? "sum(amount) as amount,$groupBySelectColumnsRaw,$groupBySelectColumnsIdsRaw" : "sum(amount) as amount,$groupBySelectColumnsRaw";
             } else {
-                $rawSelect = "expenses.id,transactionId,amount,dateOfExpense,title,expenseCategoryName,expenseTypeName,users.name as userName,mainLocationName,subLocationName";
+                $rawSelect = "expenses.id,transactionId,amount,dateOfExpense,title,expenseCategoryName,expenseTypeName,users.name as userName,mainLocationName,subLocationName,expenses.expenseCategoryId,expenses.expenseTypeId,expenses.userId,expenses.subLocationId,expenses.mainLocationId";
                 if (!empty($request->monthWise) && $request->monthWise == "yes") {
                     $rawSelect .= ",Month(dateOfExpense),Year(dateOfExpense)";
                 }
