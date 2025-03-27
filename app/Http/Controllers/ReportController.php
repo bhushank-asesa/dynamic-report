@@ -27,8 +27,12 @@ class ReportController extends Controller
                 'userId.*' => 'nullable|exists:users,id',
                 'fromDate' => 'nullable|date|date_format:Y-m-d',
                 'toDate' => 'nullable|date|date_format:Y-m-d',
-                'topN' => 'nullable|numeric|gt:0',
-                'monthWise' => 'required|string|in:yes,no',
+                'limit' => 'nullable|numeric|gt:0',
+                'maxAmount' => 'nullable|numeric|gt:0',
+                'minAmount' => 'nullable|numeric|gt:0',
+                'sortAmount' => 'nullable|in:asc,desc',
+                'monthWise' => 'nullable|in:yes,no',
+                'subRecords' => 'nullable|in:yes,no',
                 'groupBy' => [
                     'nullable',
                     'array',
@@ -79,7 +83,7 @@ class ReportController extends Controller
                 foreach ($groupBy as &$item) {
                     $item = $groupByColumns[$item];
                 }
-                $reportQuery->orderBy(DB::raw("sum(amount)"), "desc")->groupByRaw(implode(",", $groupBy));
+                $reportQuery->groupByRaw(implode(",", $groupBy));
             }
             if (!empty($request->expenseTypeId)) {
                 $reportQuery->whereIn("expenses.expenseTypeId", $request->expenseTypeId);
@@ -108,7 +112,7 @@ class ReportController extends Controller
                 $tempGroupBySelectColumnsRaw = [];
                 $tempGroupBySelectColumnsIdsRaw = [];
                 foreach ($request->groupBy as $item) {
-                    $tempGroupBySelectColumnsRaw[] = $item == "monthWise" ? "YEAR(dateOfExpense)  as txnYear, MONTH(dateOfExpense) as txnMonth" : $groupBySelectColumns[$item];
+                    $tempGroupBySelectColumnsRaw[] = $item == "monthWise" ? "YEAR(dateOfExpense)  as txnYear, MONTH(dateOfExpense) as txnMonth, concat(MONTH(dateOfExpense),'-',YEAR(dateOfExpense)) as monthYear" : $groupBySelectColumns[$item];
                     if (in_array($item, ['mainLocationId'])) {
                         $tempGroupBySelectColumnsIdsRaw[] = "expenses.$item";
                     } else if (in_array($item, ['monthWise'])) {
@@ -125,17 +129,28 @@ class ReportController extends Controller
                 $rawSelect = $groupBySelectColumnsIdsRaw ? "sum(amount) as amount,$groupBySelectColumnsRaw,$groupBySelectColumnsIdsRaw" : "sum(amount) as amount,$groupBySelectColumnsRaw";
             } else {
                 $rawSelect = "expenses.id,transactionId,amount,dateOfExpense,title,expenseCategoryName,expenseTypeName,users.name as userName,mainLocationName,subLocationName";
-                if (!empty($request->monthWise) && $request->montWise == "yes") {
+                if (!empty($request->monthWise) && $request->monthWise == "yes") {
                     $rawSelect .= ",Month(dateOfExpense),Year(dateOfExpense)";
                 }
             }
             $reportQuery2 = clone $reportQuery;
             $data2 = $reportQuery2->selectRaw($rawSelect)->get();
-            $conditionalTotalAmount = $data2->reduce(function ($carry, $item) {
-                return $carry += $item->amount;
-            }, 0);
-            if (!empty($request->topN)) {
-                $reportQuery->limit($request->topN)->orderBy(DB::raw("amount"), "desc");
+            $conditionalTotalAmount = $data2->reduce(
+                fn($carry, $item) =>
+                $carry + $item->amount,
+                0
+            );
+            if (!empty($request->limit)) {
+                $reportQuery->limit($request->limit);
+            }
+            if (!empty($request->sortAmount)) {
+                $reportQuery->orderBy(DB::raw("amount"), $request->sortAmount);
+            }
+            if (!empty($request->minAmount)) {
+                $reportQuery->where(DB::raw("amount"), ">=", $request->minAmount);
+            }
+            if (!empty($request->maxAmount)) {
+                $reportQuery->where(DB::raw("amount"), "<=", $request->maxAmount);
             }
             $data = $reportQuery->selectRaw($rawSelect)->get();
 
@@ -169,6 +184,12 @@ class ReportController extends Controller
                         $subQuery->whereRaw("Month(dateOfExpense)=" . $groupRowItem["txnMonth"]);
                         $subQuery->whereRaw("Year(dateOfExpense)=" . $groupRowItem["txnYear"]);
                     }
+                    if (!empty($request->minAmount)) {
+                        $subQuery->where(DB::raw("amount"), ">=", $request->minAmount);
+                    }
+                    if (!empty($request->maxAmount)) {
+                        $subQuery->where(DB::raw("amount"), "<=", $request->maxAmount);
+                    }
                     if (!empty($request->expenseTypeId)) {
                         $subQuery->whereIn("expenses.expenseTypeId", $request->expenseTypeId);
                     }
@@ -190,7 +211,8 @@ class ReportController extends Controller
                     if (!empty($request->toDate)) {
                         $subQuery->where("dateOfExpense", "<=", $request->toDate);
                     }
-                    $groupRowItem['subRecords'] = $subQuery->selectRaw("*,Month(dateOfExpense) as txnMonth,Year(dateOfExpense) as txnYear")->get();
+                    if (!empty($request->subRecords) && $request->subRecords == "yes")
+                        $groupRowItem['subRecords'] = $subQuery->selectRaw("*,Month(dateOfExpense) as txnMonth,Year(dateOfExpense) as txnYear")->get();
                     $groupRowItem['subRecordsCount'] = $subQuery->count();
                     $groupRowItem['conditionalPercentage'] = $conditionalTotalAmount ? number_format($groupRowItem['amount'] * 100 / $conditionalTotalAmount, 2) : null;
                     $groupRowItem['conditionalWithLimitPercentage'] = $conditionalWithLimitTotalAmount ? number_format($groupRowItem['amount'] * 100 / $conditionalWithLimitTotalAmount, 2) : null;
@@ -198,7 +220,7 @@ class ReportController extends Controller
                 }
             }
 
-            return response()->json(['status' => true, "message" => "Reports data found", "data" => $data, "count" => count($data), "rawQuery" => $rawQuery, "conditionalWithLimitTotalAmount" => $conditionalWithLimitTotalAmount, "totalAmount" => $totalAmount, "conditionalPercentage" => $conditionalTotalAmount]);
+            return response()->json(['status' => true, "message" => "Reports data found", "data" => $data, "count" => count($data), "rawQuery" => $rawQuery, "conditionalWithLimitTotalAmount" => $conditionalWithLimitTotalAmount, "totalAmount" => $totalAmount, "conditionalTotalAmount" => $conditionalTotalAmount]);
         } catch (Exception $e) {
             info('error in ' . __METHOD__ . ' ' . $e->getMessage() . ' in file ' . $e->getFile() . ' at line no ' . $e->getLine());
             return response()->json(['status' => false, "message" => $e->getMessage()]);
